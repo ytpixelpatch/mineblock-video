@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+
+  <link rel="icon" href="pixelpatchlogo.png" type="image/x-icon"
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PixelPatch MineBlock Video</title>
+  <style>
+    :root{
+      --bg:#0f1720;
+      --card:#0b1220;
+      --accent:#10b981;
+      --text:#e6eef6;
+    }
+    html,body{height:100%;margin:0}
+    body{
+      background:linear-gradient(180deg,var(--bg),#061027 150%);
+      color:var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      display:flex;
+      align-items:flex-start;
+      justify-content:center;
+      padding:28px 16px;
+    }
+
+    .site {
+      width:100%;
+      max-width:1000px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border-radius:12px;
+      box-shadow: 0 8px 30px rgba(2,6,23,0.6);
+      padding:20px;
+    }
+
+    header {
+      display:flex;
+      gap:14px;
+      align-items:center;
+      margin-bottom:14px;
+    }
+
+    /* No logo image displayed — just textual title */
+    .title {
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .title h1{
+      margin:0;
+      font-size:20px;
+      letter-spacing:0.4px;
+    }
+    .title p{
+      margin:0;
+      color:#bcd7d0;
+      font-size:13px;
+    }
+
+    main{
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+    }
+
+    .canvas-wrap {
+      width:100%;
+      background:#000;
+      border:1px solid #233;
+      border-radius:8px;
+      overflow:hidden;
+      display:flex;
+      justify-content:center;
+      align-items:center;
+    }
+
+    canvas {
+      display:block;
+      max-width:100%;
+      height:auto;
+      background:#000;
+    }
+
+    .controls {
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
+    .status {
+      color:#cfece3;
+      font-size:13px;
+    }
+
+    .hint {
+      color:#9fdac1;
+      font-size:13px;
+    }
+
+    input[type="file"] {
+      display:none;
+    }
+
+    @media (max-width:480px){
+      .title h1{font-size:18px}
+    }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <header>
+      <div class="title">
+        <h1>PixelPatch</h1>
+        <p>MineBlock Video</p>
+      </div>
+    </header>
+
+    <main>
+      <div class="canvas-wrap">
+        <!-- main canvas where video frames are drawn -->
+        <canvas id="player" width="640" height="360" aria-label="video canvas"></canvas>
+      </div>
+
+      <div class="controls">
+        <div class="status" id="status">Loading…</div>
+        <label class="hint" id="hint">If loading fails, choose a local file:</label>
+        <input id="filePicker" type="file" accept="video/*" />
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Default video file in the same folder (must be named exactly VIDEO_FILE.mp4)
+    const VIDEO_SRC = "./VIDEO_FILE.mp4";
+
+    const canvas = document.getElementById("player");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const filePicker = document.getElementById("filePicker");
+
+    // Hidden video element that will play & loop
+    const video = document.createElement("video");
+    video.src = VIDEO_SRC;
+    video.muted = true;      // allow autoplay in most browsers
+    video.loop = true;       // continuously loop
+    video.autoplay = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.style.display = "none";
+    document.body.appendChild(video);
+
+    // draw loop raf id
+    let rafId = null;
+
+    video.addEventListener("loadedmetadata", () => {
+      // set canvas to video natural size (or change if you want scaling)
+      canvas.width = Math.max(1, video.videoWidth);
+      canvas.height = Math.max(1, video.videoHeight);
+      status("Loaded: " + canvas.width + "×" + canvas.height + ". Playing & looping.");
+      // try to play (may be blocked unless muted; it's muted so should start)
+      video.play().catch((e) => {
+        // if autoplay blocked, show file picker and message
+        console.warn("Autoplay blocked or play() failed:", e);
+        status("Autoplay blocked — click canvas or pick file to start.");
+        filePicker.style.display = "inline-block";
+      });
+      startDrawLoop();
+    });
+
+    video.addEventListener("error", () => {
+      const err = video.error;
+      const code = err ? err.code : 0;
+      const map = {
+        1: "MEDIA_ERR_ABORTED (1): fetching aborted",
+        2: "MEDIA_ERR_NETWORK (2): network error while fetching",
+        3: "MEDIA_ERR_DECODE (3): decoding error (codec?)",
+        4: "MEDIA_ERR_SRC_NOT_SUPPORTED (4): format not supported or not found"
+      };
+      status("Video load error: " + (map[code] || "Unknown media error"));
+      filePicker.style.display = "inline-block";
+    });
+
+    // If user picks a local file, use it instead
+    filePicker.addEventListener("change", (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const u = URL.createObjectURL(f);
+      video.src = u;
+      video.removeAttribute("crossorigin");
+      video.load();
+      video.play().catch(() => {});
+      filePicker.style.display = "none";
+      status("Playing chosen file...");
+    });
+
+    // Draw current video frame to canvas as often as possible (rAF)
+    function startDrawLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      function draw() {
+        if (!video.paused && !video.ended && video.readyState >= 2) {
+          try {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          } catch (e) {
+            // ignore occasional errors when video not yet drawable
+          }
+        }
+        rafId = requestAnimationFrame(draw);
+      }
+      rafId = requestAnimationFrame(draw);
+    }
+
+    // allow user to click canvas to (re)start playback if blocked
+    canvas.addEventListener("click", async () => {
+      try {
+        await video.play();
+        status("Playback started by user.");
+        filePicker.style.display = "none";
+      } catch (e) {
+        status("Click failed to start playback: " + (e && e.message));
+      }
+    });
+
+    function status(text) {
+      statusEl.textContent = text;
+      console.log(text);
+    }
+
+    // cleanup
+    window.addEventListener("beforeunload", () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      try { video.pause(); } catch {}
+    });
+  </script>
+</body>
+</html>
